@@ -1,0 +1,6 @@
+name: At工具pro
+display_name: At工具
+desc: 新版本的@工具，让LLM可以更自然的使用@。
+version: v2.0
+author: 糯米茨
+repo: https://github.com/nuomicici/astrbot_plugin_AtTool/
