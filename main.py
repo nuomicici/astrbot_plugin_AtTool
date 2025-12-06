@@ -96,17 +96,16 @@ class LLMAtToolPlugin(Star):
             logger.error(f"API调用失败: {e}")
             return None
 
+ # 修改处：增加了 *args 以兼容 AstrBot 传入的额外参数
     @filter.on_decorating_result(priority=2)
-    async def process_at_tags(self, event: AstrMessageEvent):
+    async def process_at_tags(self, event: AstrMessageEvent, *args):
         """
         拦截消息，将文本中的 [at:id] 转换为真实 At 组件。
-        priority=2 确保在默认处理之后、发送之前执行。
         """
         result = event.get_result()
         if not result or not result.chain:
             return
 
-        # 快速检查，避免无意义遍历
         has_tag = False
         for comp in result.chain:
             if isinstance(comp, Plain) and "[at:" in comp.text:
@@ -122,31 +121,25 @@ class LLMAtToolPlugin(Star):
             if isinstance(comp, Plain):
                 text = comp.text
                 last_idx = 0
-                # 正则查找所有标签
                 for match in self.at_pattern.finditer(text):
                     start, end = match.span()
                     
-                    # 添加标签前的文本
                     if start > last_idx:
                         pre_text = text[last_idx:start]
                         if pre_text:
                             new_chain.append(Plain(pre_text))
                     
                     target_id = match.group(1)
-                    
-                    # 添加 At 组件，前后加零宽空格防止粘连
+                    # 前后加零宽空格防止粘连
                     new_chain.append(Plain("\u200b")) 
                     new_chain.append(At(qq=target_id))
                     new_chain.append(Plain("\u200b"))
                     
                     last_idx = end
                 
-                # 添加剩余文本
                 if last_idx < len(text):
                     new_chain.append(Plain(text[last_idx:]))
             else:
-                # 保留图片等其他组件
                 new_chain.append(comp)
 
-        # 替换原消息链
         result.chain = new_chain
