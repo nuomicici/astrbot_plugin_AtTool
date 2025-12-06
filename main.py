@@ -8,95 +8,103 @@ from astrbot.api import logger
 from astrbot.core.message.components import Plain, At, BaseMessageComponent
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
 
+@register("llm_at_tool", "YourName", "智能群成员艾特工具", "1.1.0")
 class LLMAtToolPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
+        # 匹配 [mention:123456] 格式
         self.mention_pattern = re.compile(r'\[mention:(\d+)\]')
+
+    @filter.llm_tool(name="search_group_member")
+    async def search_group_member(self, event: AstrMessageEvent, keyword: str) -> str:
+        """
+        根据关键词搜索群成员。
+        当用户想要艾特(@)某人，但你不知道那个人的 user_id 时，请先调用此工具进行搜索。
+        
+        Args:
+            keyword (str): 搜索关键词。可以是昵称、群名片、QQ号或部分名字。
+            
+        Returns:
+            JSON字符串，包含匹配到的成员列表（最多返回10个最匹配的结果）。
+        """
+        # 1. 环境检查
+        if not isinstance(event, AiocqhttpMessageEvent):
+            return json.dumps({"error": "此功能仅支持QQ群聊环境"})
+        
+        group_id = event.get_group_id()
+        if not group_id:
+            return json.dumps({"error": "无法获取群号，请确保在群聊中使用"})
+
+        # 2. 获取群成员列表 (这一步在Python侧处理，不消耗LLM Token)
+        try:
+            # 调用 OneBot API 获取列表
+            full_list = await event.bot.api.call_action('get_group_member_list', group_id=group_id)
+            if not full_list:
+                return json.dumps({"result": [], "msg": "群成员列表为空或获取失败"})
+        except Exception as e:
+            logger.error(f"获取群成员失败: {e}")
+            return json.dumps({"error": f"API调用异常: {str(e)}"})
+
+        # 3. Python侧进行过滤 (核心优化点)
+        keyword_str = str(keyword).lower().strip()
+        matched_members = []
+        
+        for member in full_list:
+            user_id = str(member.get('user_id', ''))
+            nickname = str(member.get('nickname', '')).lower()
+            card = str(member.get('card', '')).lower()
+            role = member.get('role', 'member')
+            
+            # 匹配逻辑：QQ号精确匹配 或 昵称/名片包含关键词
+            if (keyword_str == user_id) or (keyword_str in nickname) or (keyword_str in card):
+                matched_members.append({
+                    "user_id": user_id,
+                    "name": card if card else nickname, # 优先显示群名片
+                    "role": role,
+                    "match_reason": "id" if keyword_str == user_id else "name"
+                })
+
+        # 4. 结果截断 (防止返回太多Token)
+        # 如果完全匹配QQ号，通常只有一个，直接返回
+        # 如果是名字匹配，限制返回前10个，防止搜"a"出来几百人
+        limit = 10
+        result_count = len(matched_members)
+        final_result = matched_members[:limit]
+
+        response_data = {
+            "search_keyword": keyword,
+            "total_match": result_count,
+            "members": final_result,
+            "tips": "如果找到了目标，请使用 mention_user 工具传入 user_id。如果没找到，请询问用户更准确的名字。" if result_count > 0 else "未找到匹配成员"
+        }
+
+        return json.dumps(response_data, ensure_ascii=False)
 
     @filter.llm_tool(name="mention_user")
     async def mention_user(self, event: AstrMessageEvent, user_id: str) -> str:
         """
-        生成艾特(At)用户的标签。
-        仅在用户明确要求“艾特”、“提醒”、“呼叫”或“@”某人，或你判断必须引起特定群成员注意时调用。
+        生成艾特(At)标签。
+        只有在你知道确切的 user_id 后才能调用此工具。
         
         Args:
-            user_id (str): 目标用户的数字ID/QQ号。若不知道ID，请先调用 get_info_to_at 查询。
+            user_id (str): 目标用户的数字ID (QQ号)。
+            
+        Returns:
+            str: 一个特殊的标记字符串，系统会自动将其转换为艾特消息。
         """
+        # 这是一个简单的格式化工具，LLM输出这个字符串后，会被下方的 process_at_tags 捕获
         return f"[mention:{user_id}]"
-
-    @filter.llm_tool(name="get_info_to_at")
-    async def get_group_members(self, event: AstrMessageEvent) -> str:
-        """
-        获取当前群聊的成员列表（包含user_id、昵称、角色）。
-        适用场景：
-        需要查找特定成员的 user_id 以便调用 mention_user 工具时。
-        注意：仅在群聊中有效。
-        """
-        start_time = time.time()
-        
-        try:
-            group_id = event.get_group_id()
-            if not group_id:
-                return json.dumps({"error": "非群聊环境，无法获取成员列表"})
-            
-            if not isinstance(event, AiocqhttpMessageEvent):
-                return json.dumps({"error": "仅支持QQ群聊(aiocqhttp)"})
-
-            members_info = await self._get_group_members_internal(event)
-            if not members_info:
-                return json.dumps({"error": "获取失败(权限不足或网络错误)"})
-            
-            processed_members = [
-                {
-                    "user_id": str(member.get("user_id", "")),
-                    "names": [  # 聚合所有可能的名称，方便LLM搜索
-                        member.get("card", ""), 
-                        member.get("nickname", ""), 
-                        f"用户{member.get('user_id')}"
-                    ],
-                    "role": member.get("role", "member")
-                }
-                for member in members_info if member.get("user_id")
-            ]
-            
-            # 稍微精简返回结构以节省Token，names列表过滤空字符串
-            final_members = []
-            for m in processed_members:
-                m["names"] = [n for n in m["names"] if n]
-                final_members.append(m)
-
-            group_info = {
-                "group_id": group_id,
-                "count": len(final_members),
-                "members": final_members
-            }
-            
-            elapsed_time = time.time() - start_time
-            logger.debug(f"获取群成员成功: {len(final_members)}人, 耗时{elapsed_time:.2f}s")
-            
-            return json.dumps(group_info, ensure_ascii=False) # 去掉indent节省token，LLM能读懂紧凑JSON
-        except Exception as e:
-            logger.error(f"获取群成员错误: {e}")
-            return json.dumps({"error": str(e)})
-
-    async def _get_group_members_internal(self, event: AiocqhttpMessageEvent) -> Optional[List[Dict[str, Any]]]:
-        """内部函数：调用API获取群成员列表"""
-        try:
-            group_id = event.get_group_id()
-            if not group_id:
-                return None
-            return await event.bot.api.call_action('get_group_member_list', group_id=group_id)
-        except Exception as e:
-            logger.error(f"API调用失败: {e}")
-            return None
 
     @filter.on_decorating_result(priority=2)
     async def process_at_tags(self, event: AstrMessageEvent):
-        """拦截消息，将 [mention:id] 转换为真实 At 组件"""
+        """
+        结果装饰器：拦截 LLM 的回复，将 [mention:123] 替换为真实的 At 组件。
+        """
         result = event.get_result()
         if not result or not result.chain:
             return
 
+        # 快速检查是否有标记，避免无意义的循环
         has_tag = False
         for comp in result.chain:
             if isinstance(comp, Plain) and "[mention:" in comp.text:
@@ -112,22 +120,28 @@ class LLMAtToolPlugin(Star):
             if isinstance(comp, Plain):
                 text = comp.text
                 last_idx = 0
+                # 使用正则查找所有标记
                 for match in self.mention_pattern.finditer(text):
                     start, end = match.span()
+                    
+                    # 添加标记前的文本
                     if start > last_idx:
-                        pre_text = text[last_idx:start]
-                        if pre_text:
-                            new_chain.append(Plain(pre_text))
+                        new_chain.append(Plain(text[last_idx:start]))
                     
                     target_id = match.group(1)
-                    new_chain.append(Plain("\u200b \u200b")) # 零宽空格防吞
+                    
+                    # 插入 At 组件
+                    # 注意：某些平台可能需要前后加空格防止解析错误，这里加了零宽空格美化
                     new_chain.append(At(qq=target_id))
-                    new_chain.append(Plain("\u200b \u200b"))
+                    
                     last_idx = end
                 
+                # 添加标记后的剩余文本
                 if last_idx < len(text):
                     new_chain.append(Plain(text[last_idx:]))
             else:
+                # 非文本组件直接保留（如图片等）
                 new_chain.append(comp)
 
+        # 替换原消息链
         result.chain = new_chain
