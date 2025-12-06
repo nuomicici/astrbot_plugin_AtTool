@@ -1,4 +1,10 @@
-# AstrBot LLM 艾特工具 (At Tool)
+<div align="center">
+<img style="width:70%" src="https://count.getloli.com/@astrbot_plugin_AtTool?name=astrbot_plugin_AtTool&theme=booru&padding=5&offset=0&align=top&scale=1&pixelated=1&darkmode=auto" alt=":name">
+
+# 好感度/关系管理插件
+
+<div align="left" style="width:70%">
+
 
 让你的 AstrBot 拥有“真正”艾特群成员的能力。
 
