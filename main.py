@@ -8,7 +8,6 @@ from astrbot.api import logger
 from astrbot.core.message.components import Plain, At, BaseMessageComponent
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import AiocqhttpMessageEvent
 
-@register("llm_at_tool", "AstrBot", "LLM At Tool & Group Info", "1.1.0")
 class LLMAtToolPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
