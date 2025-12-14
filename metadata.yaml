@@ -1,6 +1,6 @@
 name: astrbot_plugin_AtTool
 display_name: "@工具（艾特工具）"
 desc: "重制版@工具"
-version: v2.2.2beta
+version: v2.2.2
 author: 糯米茨
 repo: https://github.com/nuomicici/astrbot_plugin_AtTool
