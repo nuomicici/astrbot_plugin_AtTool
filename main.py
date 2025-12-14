@@ -24,7 +24,7 @@ class LLMAtToolPlugin(Star):
         使用 XML 格式定义艾特协议。
         """
         instruction = (
-            "\n\n
+            "\n\n"
             "<at_mention_protocol>\n"
             "    <description>协议用于在群聊中艾特(At)特定成员以引起注意。</description>\n"
             "    <workflow>\n"
