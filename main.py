@@ -157,6 +157,7 @@ class LLMAtToolPlugin(Star):
                     
                     # 插入真实组件
                     new_chain.append(At(qq=target_id))
+                    new_chain.append(Plain("\u200b"))
 
                     last_idx = end
 
