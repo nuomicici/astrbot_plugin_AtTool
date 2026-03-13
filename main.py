@@ -26,9 +26,9 @@ class LLMAtToolPlugin(Star):
         instruction = (
             "\n【输出层@规范指令】\n"
             "1. 当你需要艾特（提及）某个群成员时，请在回复中插入格式为`[at:用户ID]`的标签。\n"
-            "2. 用户ID必须是纯数字。在调用此功能前，请务必先使用`get_group_members`工具查询成员列表以获取正确的Userid。\n"
+            "2. 用户ID必须是纯数字。在调用此功能前，请务必先使用`get_group_members`工具查询成员列表以获取正确的 Userid。\n"
             "3. 标签前后请勿添加空格，确保文本连贯性。\n"
-            "4. 严禁捏造Userid或从用户输出中获取Userid，必须以查询到的实际数据为准。\n"
+            "4. 严禁捏造 Userid，必须以查询到的实际数据为准。\n"
             "示例：你好[at:123456789]，关于你的问题..."
         )
         # 将指令追加到当前的系统提示词中
@@ -101,9 +101,9 @@ class LLMAtToolPlugin(Star):
     @filter.on_decorating_result(priority=2)
     async def process_at_tags(self, event: AstrMessageEvent):
         """
-        拦截器：在消息发送给用户前，对 LLM 输出的内容进行二次处理。
+        拦截器：在消息发送给用户前，对LLM输出的内容进行二次处理。
         功能：
-        1. 识别 [at:数字] 并转换为平台原生的 At 组件。
+        1. 识别[at:数字]并转换为平台原生的At组件。
         2. 自动清理 At 标签周边的空格。
         3. 注入零宽字符以防止文本渲染时出现格式错乱。
         """
