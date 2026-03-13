@@ -140,6 +140,8 @@ class LLMAtToolPlugin(Star):
                     # 获取 ID 并插入 At 组件
                     target_id = match.group(1)
                     new_chain.append(At(qq=target_id))
+                    # 可以考虑在@后加一个空格，避免粘连
+                    new_chain.append(Plain(" "))
 
                     last_idx = end
 
