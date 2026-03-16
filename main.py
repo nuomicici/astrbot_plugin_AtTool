@@ -12,8 +12,8 @@ from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import Aioc
 class LLMAtToolPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
-        # 正则表达式：用于匹配符合规范的艾特标签，例如 [at:123456]
-        self.valid_at_pattern = re.compile(r'\[at:(\d+)\]')
+        # 正则表达式：用于匹配符合规范的艾特标签，例如 [at:123456] 或 [at:all]
+        self.valid_at_pattern = re.compile(r'\[at:(\d+|all)\]')
         # 正则表达式：用于匹配不符合规范的标签（如包含非数字内容），保留用于后续可能的逻辑处理
         self.garbage_at_pattern = re.compile(r'\[at:[^\]]+\]')
 
@@ -29,7 +29,9 @@ class LLMAtToolPlugin(Star):
             "2. 用户ID必须是纯数字。在调用此功能前，请务必先使用`get_group_members`工具查询成员列表以获取正确的 Userid。\n"
             "3. 标签前后请勿添加空格，确保文本连贯性。\n"
             "4. 严禁捏造 Userid，必须以查询到的实际数据为准。\n"
-            "示例：你好[at:123456789]，关于你的问题..."
+            "5. 当你需要艾特全体成员时，请使用`[at:all]`标签。注意：艾特全体需要Bot具有群管理员权限。\n"
+            "示例：你好[at:123456789]，关于你的问题...\n"
+            "艾特全体示例：[at:all]请大家注意以下通知..."
         )
         # 将指令追加到当前的系统提示词中
         req.system_prompt += instruction
