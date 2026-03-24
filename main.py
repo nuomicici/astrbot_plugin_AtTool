@@ -13,6 +13,8 @@ from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
 
 
 class LLMAtToolPlugin(Star):
+    AT_ALL_PERMISSION_CACHE_KEY = "_at_all_permission_result"
+
     def __init__(self, context: Context, config: Optional[AstrBotConfig] = None):
         super().__init__(context)
         self.config = config if config is not None else {}
@@ -21,12 +23,7 @@ class LLMAtToolPlugin(Star):
         # 正则表达式：用于匹配不符合规范的标签（如包含非数字内容），保留用于后续可能的逻辑处理
         self.garbage_at_pattern = re.compile(r"\[at:[^\]]+\]")
         self.permission_verification = self.config.get("permission_verification", True)
-        self.llm_prompt_permission_on = self._normalize_editor_text(
-            self.config.get("llm_prompt_permission_on", "")
-        )
-        self.llm_prompt_permission_off = self._normalize_editor_text(
-            self.config.get("llm_prompt_permission_off", "")
-        )
+        self.llm_prompt = self._normalize_editor_text(self.config.get("llm_prompt", ""))
 
     @staticmethod
     def _normalize_editor_text(text: object) -> str:
@@ -54,23 +51,33 @@ class LLMAtToolPlugin(Star):
             logger.warning(f"检查 Bot 超级管理员权限失败: {exc}")
             return False
 
+    @staticmethod
+    def _build_sender_identity_reason(
+        sender_id: object | None, reason_suffix: str
+    ) -> str:
+        if not sender_id:
+            return "无法识别他的身份,拒绝执行"
+        return f"{sender_id}{reason_suffix}"
+
     async def _check_at_all_permission(
         self, event: AstrMessageEvent
     ) -> Tuple[bool, str]:
         group_id = event.get_group_id()
         if not group_id:
-            return False, "当前不在群聊环境中，不能艾特全体。"
+            return False, "非群聊场景"
 
         if self._is_bot_super_admin(event):
             return True, ""
 
         if not isinstance(event, AiocqhttpMessageEvent):
-            return False, "当前平台暂不支持校验@全体权限，已拒绝执行。"
+            return False, "当前平台不支持@全体权限校验"
 
         sender_getter = getattr(event, "get_sender_id", None)
         sender_id = sender_getter() if callable(sender_getter) else None
         if not sender_id:
-            return False, "当前无法识别操作者身份，已拒绝执行@全体。"
+            return False, self._build_sender_identity_reason(
+                sender_id, "的身份,拒绝执行"
+            )
 
         try:
             group_member_info = await event.bot.api.call_action(
@@ -82,12 +89,29 @@ class LLMAtToolPlugin(Star):
             logger.warning(
                 f"查询@全体权限失败: group_id={group_id}, user_id={sender_id}, error={exc}"
             )
-            return False, "当前无法校验你的群权限，已拒绝执行@全体。"
+            return False, "查询群成员权限失败"
 
         role = str(group_member_info.get("role", "member")).lower()
         if role in {"owner", "admin"}:
             return True, ""
-        return False, "他不是管理员、群主或 Bot 超级管理员，不能这样干。"
+        return False, self._build_sender_identity_reason(
+            sender_id, " 不是群主、管理员或 Bot 超级管理员"
+        )
+
+    async def _get_at_all_permission_result(
+        self, event: AstrMessageEvent
+    ) -> Tuple[bool, str]:
+        cached_result = event.get_extra(self.AT_ALL_PERMISSION_CACHE_KEY)
+        if (
+            isinstance(cached_result, tuple)
+            and len(cached_result) == 2
+            and isinstance(cached_result[1], str)
+        ):
+            return bool(cached_result[0]), cached_result[1]
+
+        permission_result = await self._check_at_all_permission(event)
+        event.set_extra(self.AT_ALL_PERMISSION_CACHE_KEY, permission_result)
+        return permission_result
 
     @filter.on_llm_request()
     async def inject_at_instruction(
@@ -97,13 +121,27 @@ class LLMAtToolPlugin(Star):
         在 LLM（大语言模型）发出请求前注入系统提示词。
         告知模型如何使用特定的 XML 标签格式来进行艾特操作。
         """
-        instruction = (
-            self.llm_prompt_permission_on
-            if self.permission_verification
-            else self.llm_prompt_permission_off
-        )
+        instruction = self.llm_prompt
         # 将指令追加到当前的系统提示词中
-        req.system_prompt += instruction
+        req.system_prompt = (req.system_prompt or "") + instruction
+
+        if not self.permission_verification:
+            return
+
+        allowed, deny_message = await self._get_at_all_permission_result(event)
+        if allowed:
+            req.system_prompt += (
+                "\n当前操作者具备@全体权限。"
+                "\n如用户明确要求且场景确有必要，你可以输出 [at:all]。"
+            )
+            return
+
+        req.system_prompt += (
+            "\n当前操作者不具备@全体权限。"
+            f"\n原因：{deny_message}"
+            "\n禁止输出 [at:all]。"
+            "\n如果用户要求@全体，请直接用自然语言说明无法执行，不要输出任何 @全体 标签。"
+        )
 
     @filter.llm_tool(name="get_group_members")
     async def get_group_members(
@@ -219,14 +257,18 @@ class LLMAtToolPlugin(Star):
         if not has_tag:
             return
 
+        at_all_allowed = True
         if self.permission_verification and has_at_all_tag:
-            allowed, deny_message = await self._check_at_all_permission(event)
-            if not allowed:
+            at_all_allowed, deny_message = await self._get_at_all_permission_result(
+                event
+            )
+            if not at_all_allowed:
                 logger.info(
-                    f"拒绝执行@全体: group_id={event.get_group_id()}, sender_id={getattr(event, 'get_sender_id', lambda: None)()}"
+                    "拦截越权@全体并降级为普通文本: "
+                    f"group_id={event.get_group_id()}, "
+                    f"sender_id={getattr(event, 'get_sender_id', lambda: None)()}, "
+                    f"reason={deny_message}"
                 )
-                result.chain = [Plain(deny_message)]
-                return
 
         new_chain: List[BaseMessageComponent] = []
 
@@ -244,8 +286,13 @@ class LLMAtToolPlugin(Star):
                     if start > last_idx:
                         new_chain.append(Plain(text[last_idx:start]))
 
-                    # 获取 ID 并插入 At 组件
+                    # 获取 ID 并插入 At 组件；越权的 @全体 会降级为普通文本兜底
                     target_id = match.group(1)
+                    if target_id == "all" and not at_all_allowed:
+                        new_chain.append(Plain("@全体成员"))
+                        last_idx = end
+                        continue
+
                     new_chain.append(At(qq=target_id))
                     # 可以考虑在@后加一个空格，避免粘连
                     new_chain.append(Plain(" "))
