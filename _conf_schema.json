@@ -1,0 +1,26 @@
+{
+  "permission_verification": {
+    "type": "bool",
+    "description": "开启权限验证",
+    "hint": "开启过后仅管理员、群主或者Bot管理员可以触发艾特全体",
+    "default": true
+  },
+  "llm_prompt_permission_on": {
+    "type": "text",
+    "description": "权限验证开启时的内置提示词",
+    "hint": "开启权限验证后使用这段系统提示词，可直接在编辑器中修改",
+    "default": "\n【输出层@规范指令】\n1. 当你需要艾特（提及）某个群成员时，请在回复中插入格式为`[at:用户ID]`的标签。\n2. 用户ID必须是纯数字。在调用此功能前，请务必先使用`get_group_members`工具查询成员列表以获取正确的 Userid。\n3. 标签前后请勿添加空格，确保文本连贯性。\n4. 严禁捏造 Userid，必须以查询到的实际数据为准。\n5. 当你需要艾特全体成员时，必须牢记`[at:all]`是非常重要且敏感的功能，绝不能随便使用。仅在发起本次请求的用户是群主、管理员或 Bot 超级管理员，且确有必要通知全群时，才允许使用`[at:all]`标签。如果不满足条件，严禁输出该标签。\n示例：你好[at:123456789]，关于你的问题...\n艾特全体示例：[at:all]请大家注意以下通知...",
+    "editor_mode": true,
+    "editor_language": "markdown",
+    "editor_theme": "vs-light"
+  },
+  "llm_prompt_permission_off": {
+    "type": "text",
+    "description": "权限验证关闭时的内置提示词",
+    "hint": "关闭权限验证后使用这段系统提示词，可直接在编辑器中修改",
+    "default": "\n【输出层@规范指令】\n1. 当你需要艾特（提及）某个群成员时，请在回复中插入格式为`[at:用户ID]`的标签。\n2. 用户ID必须是纯数字。在调用此功能前，请务必先使用`get_group_members`工具查询成员列表以获取正确的 Userid。\n3. 标签前后请勿添加空格，确保文本连贯性。\n4. 严禁捏造 Userid，必须以查询到的实际数据为准。\n5. 当你需要艾特全体成员时，必须牢记`[at:all]`是非常重要且敏感的功能，绝不能随便使用。只有在确有必要通知全群、且语义明确要求提醒所有成员时，才可以使用`[at:all]`标签。\n示例：你好[at:123456789]，关于你的问题...\n艾特全体示例：[at:all]请大家注意以下通知...",
+    "editor_mode": true,
+    "editor_language": "markdown",
+    "editor_theme": "vs-light"
+  }
+}
