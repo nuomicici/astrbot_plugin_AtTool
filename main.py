@@ -11,9 +11,19 @@ from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
     AiocqhttpMessageEvent,
 )
 
+try:
+    from astrbot.core.agent.message import TextPart
+except ImportError:
+    TextPart = None
+
 
 class LLMAtToolPlugin(Star):
     AT_ALL_PERMISSION_CACHE_KEY = "_at_all_permission_result"
+    AT_ALL_PERMISSION_RULE_PROMPT = (
+        "\n【@全体权限规则】\n"
+        "只有群主、群管理员或 Bot 超级管理员才能艾特全体成员。"
+        "\n本轮操作者是否具备该权限，以本轮用户消息后附带的权限说明为准。"
+    )
 
     def __init__(self, context: Context, config: Optional[AstrBotConfig] = None):
         super().__init__(context)
@@ -122,26 +132,59 @@ class LLMAtToolPlugin(Star):
         告知模型如何使用特定的 XML 标签格式来进行艾特操作。
         """
         instruction = self.llm_prompt
-        # 将指令追加到当前的系统提示词中
+        # 将固定指令追加到当前的系统提示词中
         req.system_prompt = (req.system_prompt or "") + instruction
 
         if not self.permission_verification:
             return
 
+        # 全局权限规则保持稳定，便于复用系统提示词前缀缓存
+        req.system_prompt += self.AT_ALL_PERMISSION_RULE_PROMPT
+
         allowed, deny_message = await self._get_at_all_permission_result(event)
         if allowed:
-            req.system_prompt += (
+            permission_note = (
+                "\n<at_all_permission>"
                 "\n当前操作者具备@全体权限。"
                 "\n如用户明确要求且场景确有必要，你可以输出 [at:all]。"
+                "\n</at_all_permission>"
             )
+        else:
+            permission_note = (
+                "\n<at_all_permission>"
+                "\n当前操作者不具备@全体权限。"
+                f"\n原因：{deny_message}"
+                "\n禁止输出 [at:all]。"
+                "\n如果用户要求@全体，请直接用自然语言说明无法执行，不要输出任何 @全体 标签。"
+                "\n</at_all_permission>"
+            )
+
+        self._append_permission_note(req, permission_note)
+
+    @staticmethod
+    def _append_permission_note(req: ProviderRequest, note: str) -> None:
+        """把每轮随发言者变化的权限结论放到本轮用户消息之后，避免污染系统提示词。"""
+        if TextPart is None:
+            req.system_prompt += note
             return
 
-        req.system_prompt += (
-            "\n当前操作者不具备@全体权限。"
-            f"\n原因：{deny_message}"
-            "\n禁止输出 [at:all]。"
-            "\n如果用户要求@全体，请直接用自然语言说明无法执行，不要输出任何 @全体 标签。"
-        )
+        try:
+            parts = req.extra_user_content_parts
+            for part in parts or []:
+                part_text = getattr(part, "text", None)
+                if (
+                    isinstance(part_text, str)
+                    and "<at_all_permission>" in part_text
+                ):
+                    return
+            text_part = TextPart(text=note)
+            mark_as_temp = getattr(text_part, "mark_as_temp", None)
+            if callable(mark_as_temp):
+                text_part = mark_as_temp()
+            parts.append(text_part)
+        except Exception as exc:
+            logger.warning(f"写入动态权限提示失败，回退到系统提示词: {exc}")
+            req.system_prompt += note
 
     @filter.llm_tool(name="get_group_members")
     async def get_group_members(
