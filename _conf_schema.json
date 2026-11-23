@@ -1,4 +1,10 @@
 {
+  "forward_compatible": {
+    "type": "bool",
+    "description": "合并转发兼容",
+    "hint": "遇到合并转发消息时，将艾特放置在消息外面，让艾特真正生效",
+    "default": true
+  },
   "permission_verification": {
     "type": "bool",
     "description": "开启权限验证",
