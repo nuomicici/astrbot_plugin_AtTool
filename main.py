@@ -6,7 +6,14 @@ from astrbot.api.star import Star, Context
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api import logger, AstrBotConfig
 from astrbot.api.provider import ProviderRequest
-from astrbot.core.message.components import Plain, At, BaseMessageComponent
+from astrbot.core.message.components import (
+    At,
+    BaseMessageComponent,
+    Node,
+    Nodes,
+    Plain,
+)
+from astrbot.core.message.message_event_result import MessageChain
 from astrbot.core.platform.sources.aiocqhttp.aiocqhttp_message_event import (
     AiocqhttpMessageEvent,
 )
@@ -24,6 +31,8 @@ class LLMAtToolPlugin(Star):
         "只有群主、群管理员或 Bot 超级管理员才能艾特全体成员。"
         "\n本轮操作者是否具备该权限，以本轮用户消息后附带的权限说明为准。"
     )
+    FORWARD_WRAPPER_KEY = "_attool_forward_compatibility_wrapped"
+    FORWARD_NOTICE = "，长回复见上方合并转发"
 
     def __init__(self, context: Context, config: Optional[AstrBotConfig] = None):
         super().__init__(context)
@@ -34,6 +43,7 @@ class LLMAtToolPlugin(Star):
         self.garbage_at_pattern = re.compile(r"\[at:[^\]]+\]")
         self.permission_verification = self.config.get("permission_verification", True)
         self.llm_prompt = self._normalize_editor_text(self.config.get("llm_prompt", ""))
+        self.forward_compatible = self.config.get("forward_compatible", True)
 
     @staticmethod
     def _normalize_editor_text(text: object) -> str:
@@ -275,6 +285,86 @@ class LLMAtToolPlugin(Star):
                 ensure_ascii=False,
             )
 
+    @classmethod
+    def _extract_forward_mentions(cls, component, mentions) -> None:
+        """从转发节点提取 At 组件并保持原有顺序。"""
+        if isinstance(component, Nodes):
+            for node in component.nodes:
+                cls._extract_forward_mentions(node, mentions)
+            return
+        if not isinstance(component, Node):
+            return
+
+        content = []
+        remove_placeholder = False
+        for child in component.content:
+            if isinstance(child, At):
+                mentions.append(child)
+                remove_placeholder = True
+                continue
+            if isinstance(child, (Node, Nodes)):
+                cls._extract_forward_mentions(child, mentions)
+                content.append(child)
+                continue
+            if isinstance(child, Plain) and remove_placeholder:
+                child.text = child.text.lstrip("\u200b \t")
+                remove_placeholder = False
+                if not child.text:
+                    continue
+            content.append(child)
+        component.content = content
+
+    def _install_forward_compatibility(self, event: AstrMessageEvent) -> None:
+        if not self.forward_compatible:
+            return
+        if event.get_extra(self.FORWARD_WRAPPER_KEY):
+            return
+
+        original_send = event.send
+        pending_mentions = []
+        seen_ids = set()
+        notice_sent = False
+
+        async def send_with_forward_compatibility(*args, **kwargs):
+            nonlocal notice_sent
+
+            message = args[0] if args else kwargs.get("message")
+            if notice_sent or not isinstance(message, MessageChain):
+                return await original_send(*args, **kwargs)
+
+            forward_components = [
+                comp for comp in message.chain if isinstance(comp, (Node, Nodes))
+            ]
+            if not forward_components:
+                return await original_send(*args, **kwargs)
+
+            extracted = []
+            for component in forward_components:
+                self._extract_forward_mentions(component, extracted)
+            for mention in extracted:
+                target_id = str(mention.qq)
+                if target_id not in seen_ids:
+                    seen_ids.add(target_id)
+                    pending_mentions.append(mention)
+
+            if not pending_mentions:
+                return await original_send(*args, **kwargs)
+
+            send_result = await original_send(*args, **kwargs)
+            mentions = list(pending_mentions)
+            pending_mentions.clear()
+            notice_sent = True
+            try:
+                await original_send(
+                    MessageChain([*mentions, Plain(self.FORWARD_NOTICE)])
+                )
+            except Exception as exc:
+                logger.warning(f"合并转发外置艾特发送失败: {exc}")
+            return send_result
+
+        event.send = send_with_forward_compatibility
+        event.set_extra(self.FORWARD_WRAPPER_KEY, True)
+
     @filter.on_decorating_result(priority=2)
     async def process_at_tags(self, event: AstrMessageEvent):
         """
@@ -398,3 +488,5 @@ class LLMAtToolPlugin(Star):
 
         # 更新事件的最终渲染链
         result.chain = new_chain
+        if any(isinstance(comp, At) for comp in new_chain):
+            self._install_forward_compatibility(event)
